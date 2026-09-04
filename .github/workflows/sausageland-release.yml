@@ -1,0 +1,180 @@
+# Build dos binarios distribuidos pelo Sausageland Tibia.
+#
+# Este workflow NAO existe no upstream (mehah/otclient) — e o motivo de este
+# fork existir. Ele compila so o que o bundle do nostalrius-client consome
+# (Linux release + Windows CMake release), zipa nos mesmos nomes das releases
+# do upstream e publica uma release aqui. O nostalrius-client aponta o
+# UPSTREAM_SOURCE.env pra essa release, pinada por SHA256 como sempre.
+#
+# Por que nao reusar o ci.yml do upstream: ele compila tambem macOS, Android,
+# Docker, browser, linux-debug e as 3 configuracoes de solution do Windows —
+# horas de CI que nao usamos. E o job de Windows dele roda em
+# `windows-2025-vs2026`, um runner que so existe na org do mehah; aqui usamos
+# o runner publico e o toolset que ele tem (ver o passo de configure).
+name: Sausageland Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag da release (ex.: 4.1-sl1). Vazio = so compila e sobe artifact, sem publicar release."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    name: Build Linux
+    runs-on: ubuntu-24.04
+    env:
+      CC: gcc-14
+      CXX: g++-14
+      # Sem cache binario de vcpkg: o feed NuGet e da org do upstream e este
+      # fork nao tem credencial pra ele. Compila do zero (lento, mas roda).
+      VCPKG_BINARY_SOURCES: "clear"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Get vcpkg baseline
+        run: |
+          set -euo pipefail
+          vcpkg_commit_id="$(grep '.builtin-baseline' vcpkg.json | awk -F: '{print $2}' | tr -d '," ')"
+          echo "VCPKG_GIT_COMMIT_ID=${vcpkg_commit_id}" >> "${GITHUB_ENV}"
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf autoconf-archive automake ccache gcc-14 g++-14 \
+            libgl1-mesa-dev libglu1-mesa-dev libltdl-dev libtool libtool-bin \
+            libx11-dev libxcursor-dev libxi-dev libxinerama-dev libxrandr-dev \
+            linux-libc-dev make ninja-build perl pkg-config
+          sudo ln -sf /usr/bin/ninja /usr/bin/ninja-build
+
+      - name: CCache
+        uses: hendrikmuhs/ccache-action@v1.2.23
+        with:
+          max-size: "1G"
+          key: sl-ccache-linux-release
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitURL: "https://github.com/microsoft/vcpkg.git"
+          vcpkgGitCommitId: ${{ env.VCPKG_GIT_COMMIT_ID }}
+
+      - name: Run CMake
+        uses: lukka/run-cmake@v10
+        with:
+          configurePreset: linux-release
+          buildPreset: linux-release
+          configurePresetAdditionalArgs: "['-DTOGGLE_BIN_FOLDER=ON', '-DOPTIONS_ENABLE_IPO=OFF', '-DOTCLIENT_BUILD_TESTS=OFF']"
+
+      # Mesmo nome e mesmo layout (binario na raiz do zip) das releases do
+      # upstream — o montar-bundles.sh do nostalrius-client conta com isso.
+      - name: Package
+        run: |
+          set -euo pipefail
+          test -x build/linux-release/bin/otclient
+          (cd build/linux-release/bin && zip -qr "${GITHUB_WORKSPACE}/otclient-linux-release.zip" .)
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: otclient-linux-release
+          path: otclient-linux-release.zip
+
+  windows:
+    name: Build Windows
+    runs-on: windows-2025
+    env:
+      VCPKG_BINARY_SOURCES: "clear"
+      SCCACHE_DIR: ${{ github.workspace }}\.sccache
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Get vcpkg baseline
+        shell: pwsh
+        run: |
+          $json = Get-Content vcpkg.json -Raw | ConvertFrom-Json
+          "VCPKG_GIT_COMMIT_ID=$($json.'builtin-baseline')" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Detect MSVC platform toolset
+        id: toolset
+        shell: pwsh
+        run: |
+          # O preset windows-release pede v145 (VS 2026), que so existe no
+          # runner privado do upstream. Aqui descobrimos o toolset do runner
+          # publico e sobrescrevemos o preset com ele.
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $installationPath = & $vswhere -latest -prerelease -products "*" -property installationPath
+          $versionFile = Join-Path $installationPath "VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt"
+          $toolsetVersion = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+          $toolset = "v" + $toolsetVersion.Substring(0, 4).Replace(".", "")
+          Write-Host "VC tools $toolsetVersion -> platform toolset $toolset"
+          "toolset=$toolset" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Prepare sccache directory
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path $env:SCCACHE_DIR | Out-Null
+
+      - name: CCache
+        uses: hendrikmuhs/ccache-action@v1.2.23
+        with:
+          max-size: "1G"
+          variant: "sccache"
+          key: sl-ccache-windows-release
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitURL: "https://github.com/microsoft/vcpkg.git"
+          vcpkgGitCommitId: ${{ env.VCPKG_GIT_COMMIT_ID }}
+
+      - name: Run CMake
+        uses: lukka/run-cmake@v10
+        with:
+          configurePreset: windows-release
+          buildPreset: windows-release
+          configurePresetAdditionalArgs: "['-DTOGGLE_BIN_FOLDER=ON', '-DOPTIONS_ENABLE_IPO=OFF', '-DOTCLIENT_BUILD_TESTS=OFF', '-DVCPKG_PLATFORM_TOOLSET=${{ steps.toolset.outputs.toolset }}']"
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $bin = "build/windows-release/bin"
+          if (-not (Test-Path "$bin/otclient.exe")) { throw "otclient.exe nao foi gerado em $bin" }
+          Compress-Archive -Path "$bin/*" -DestinationPath "otclient-windows-cmake-release.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: otclient-windows-cmake-release
+          path: otclient-windows-cmake-release.zip
+
+  release:
+    name: Publish release
+    needs: [linux, windows]
+    if: inputs.tag != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v7
+        with:
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha256sum otclient-linux-release.zip otclient-windows-cmake-release.zip
+          gh release create "${{ inputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "${{ inputs.tag }}" \
+            --notes "Build do Sausageland a partir de ${{ github.sha }}. Consumido pelo nostalrius-client (UPSTREAM_SOURCE.env, pinado por SHA256)." \
+            otclient-linux-release.zip otclient-windows-cmake-release.zip
