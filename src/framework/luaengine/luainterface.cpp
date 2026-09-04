@@ -248,7 +248,11 @@ int LuaInterface::luaObjectSetEvent(LuaInterface* lua)
     assert(obj);
 
     if (key.starts_with("on")) {
-        obj->m_events[key] = true;
+        // Marks the memo as valid for the current generation. This covers a
+        // handler set directly on an instance; a handler set on the CLASS
+        // table is plain Lua and never reaches this __newindex, which is why
+        // corelib's connect() also bumps the generation explicitly.
+        obj->m_events[key] = { true, LuaObject::eventGeneration() };
     }
 
     lua->remove(-2); // removes key

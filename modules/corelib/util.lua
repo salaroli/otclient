@@ -85,6 +85,12 @@ function connect(object, arg1, arg2, arg3)
             end
         end
     end
+
+    -- LuaObject memoizes "this signal has no listener" on the first emission.
+    -- A handler bound on a class table never reaches its __newindex, so tell
+    -- the C++ side here, otherwise anything connected after the first
+    -- emission stays silent forever.
+    invalidateLuaEventCache()
 end
 
 function disconnect(object, arg1, arg2)

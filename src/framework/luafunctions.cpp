@@ -28,6 +28,7 @@
 #include <framework/core/modulemanager.h>
 #include <framework/core/resourcemanager.h>
 #include <framework/luaengine/luainterface.h>
+#include <framework/luaengine/luaobject.h>
 #include <framework/platform/platform.h>
 #include <framework/proxy/proxy.h>
 #include <framework/stdext/net.h>
@@ -79,6 +80,12 @@
 void Application::registerLuaFunctions()
 {
     // conversion globals
+    // Lets corelib's connect()/disconnect() tell the C++ side that the set of
+    // signal handlers changed, so LuaObject::callLuaField can drop its
+    // "nobody is listening" memo. Without this, any signal emitted before its
+    // module connects (the whole login burst) is silenced permanently.
+    g_lua.bindGlobalFunction("invalidateLuaEventCache", [] { LuaObject::invalidateEventCache(); });
+
     g_lua.bindGlobalFunction("torect", [](const std::string_view v) { return stdext::from_string<Rect>(v); });
     g_lua.bindGlobalFunction("topoint", [](const std::string_view v) { return stdext::from_string<Point>(v); });
     g_lua.bindGlobalFunction("tocolor", [](const std::string_view v) { return stdext::from_string<Color>(v); });
