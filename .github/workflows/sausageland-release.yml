@@ -75,10 +75,13 @@ jobs:
 
       # Mesmo nome e mesmo layout (binario na raiz do zip) das releases do
       # upstream — o montar-bundles.sh do nostalrius-client conta com isso.
+      # O upstream publica o binario com debug_info (184 MB). O jogador baixa
+      # isso; strip derruba pra ~24 MB sem mudar comportamento.
       - name: Package
         run: |
           set -euo pipefail
           test -x build/linux-release/bin/otclient
+          strip build/linux-release/bin/otclient
           (cd build/linux-release/bin && zip -qr "${GITHUB_WORKSPACE}/otclient-linux-release.zip" .)
 
       - name: Upload artifact
@@ -142,12 +145,14 @@ jobs:
           buildPreset: windows-release
           configurePresetAdditionalArgs: "['-DTOGGLE_BIN_FOLDER=ON', '-DOPTIONS_ENABLE_IPO=OFF', '-DOTCLIENT_BUILD_TESTS=OFF', '-DVCPKG_PLATFORM_TOOLSET=${{ steps.toolset.outputs.toolset }}']"
 
+      # So o exe: a build e estatica, e o resto do bin/ e .pdb/.ilk de debug
+      # (700 MB descomprimidos) que o bundle ja descartava.
       - name: Package
         shell: pwsh
         run: |
           $bin = "build/windows-release/bin"
           if (-not (Test-Path "$bin/otclient.exe")) { throw "otclient.exe nao foi gerado em $bin" }
-          Compress-Archive -Path "$bin/*" -DestinationPath "otclient-windows-cmake-release.zip"
+          Compress-Archive -Path "$bin/otclient.exe" -DestinationPath "otclient-windows-cmake-release.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
