@@ -85,6 +85,10 @@ function connect(object, arg1, arg2, arg3)
             end
         end
     end
+
+    -- O C++ memoiza "esse sinal nao tem ouvinte" no primeiro disparo; sem
+    -- avisar aqui, todo handler conectado depois da primeira emissao fica mudo.
+    invalidateLuaEventCache()
 end
 
 function disconnect(object, arg1, arg2)

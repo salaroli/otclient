@@ -91,9 +91,23 @@ public:
     template<typename T>
     std::shared_ptr<T> dynamic_self_cast() { return std::dynamic_pointer_cast<T>(shared_from_this()); }
 
+    /// Invalidates the "this field has no listener" memo on every object.
+    /// Must be called whenever Lua binds or unbinds a signal handler, because
+    /// the memo below is only sound while the set of handlers does not change.
+    static void invalidateEventCache() { ++s_eventGeneration; }
+    static uint32_t eventGeneration() { return s_eventGeneration; }
+
 private:
+    struct EventCache
+    {
+        bool hasListener;
+        uint32_t generation;
+    };
+
     int m_fieldsTableRef;
-    std::unordered_map<std::string, bool> m_events;
+    std::unordered_map<std::string, EventCache> m_events;
+
+    inline static uint32_t s_eventGeneration{ 1 };
 
     friend class LuaInterface;
 };
@@ -221,17 +235,20 @@ void LuaObject::callLuaField(const std::string_view field, const T&... args)
 {
     const std::string fieldStr = field.data();
 
-    // Avoids unnecessary overhead by checking if the field is registered before invoking the Lua event.
+    // Avoids unnecessary overhead by checking if the field is registered before
+    // invoking the Lua event. The memo is only valid for the generation it was
+    // taken in: a module that connects AFTER the first emission (anything bound
+    // in onGameStart, for instance) bumps the generation, and the next call
+    // re-checks instead of staying silent forever.
     auto it = m_events.find(fieldStr);
-    if (it != m_events.end() && !it->second)
+    if (it != m_events.end() && it->second.generation == s_eventGeneration && !it->second.hasListener)
         return;
 
     const int rets = luaCallLuaField(field, args...);
     if (rets > 0)
         g_lua.pop(rets);
 
-    if (it == m_events.end())
-        m_events[fieldStr] = rets > -1;
+    m_events[fieldStr] = { rets > -1, s_eventGeneration };
 }
 
 template<typename... T>
