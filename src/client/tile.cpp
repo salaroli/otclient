@@ -153,6 +153,28 @@ void Tile::drawLight(const MapPosInfo& mapRect, const Point& dest, LightView* li
         updateElevation(thing, drawElevation);
     }
 
+    // A creature walking north-east or south-west is drawn from the tile it is
+    // leaving (see the matching block in Tile::draw), but drawCreature() only
+    // emits it on the tile it is stepping into, so nothing emitted its light
+    // for the first half of the step and held light sources (a torch) blinked
+    // off during the walk animation. Emit it here from the tile being left.
+    for (const auto& creature : m_walkingCreatures) {
+        if (creature->getDirection() != Otc::Direction::NorthEast &&
+            creature->getDirection() != Otc::Direction::SouthWest)
+            continue;
+
+        // stepping into this tile: drawCreature() below already emits it
+        if (creature->getLastStepToPosition() == getPosition())
+            continue;
+
+        const auto& cDest = Point(
+            dest.x + ((creature->getPosition().x - m_position.x) * g_gameConfig.getSpriteSize() - creature->getDrawElevation()) * g_drawPool.getScaleFactor(),
+            dest.y + ((creature->getPosition().y - m_position.y) * g_gameConfig.getSpriteSize() - creature->getDrawElevation()) * g_drawPool.getScaleFactor()
+        );
+
+        creature->drawLight(cDest, lightView);
+    }
+
     drawCreature(mapRect, dest, Otc::DrawLights, true, drawElevation, lightView);
 
     if (m_effects) {
